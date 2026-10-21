@@ -1,0 +1,9 @@
+{
+  "name": "suivi-seniors",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Suivi Séniors 2026-2027 – Métro Foot Antony",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0"
+  }
+}

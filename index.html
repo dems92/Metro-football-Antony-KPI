@@ -1023,11 +1023,50 @@ document.addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.target.id==="sc1"
 /* ---------- boot ---------- */
 renderAll();
 function offline(msg){$("dot").className="dot";$("statusTxt").textContent=msg}
+/* Outside claude.ai (Vercel): same interface as the claude.ai db, backed by /api/data with polling */
+async function httpDb(){
+  if(!/^https?:$/.test(location.protocol))return null;
+  const COLS=["players","matches","sessions"],subs={players:[],matches:[],sessions:[]};
+  let cache=null,rev=-1,busy=0,timer=null;
+  const getCode=()=>{try{return localStorage.getItem("mfaCoach")||""}catch(e){return""}};
+  const setCode=v=>{try{localStorage.setItem("mfaCoach",v)}catch(e){}};
+  function emit(){COLS.forEach(c=>{const docs=Object.keys(cache[c]||{}).map(id=>({id,data:()=>cache[c][id]}));subs[c].forEach(f=>f({docs}))})}
+  async function pull(){
+    const r=await fetch("/api/data?rev="+rev,{cache:"no-store"});
+    if(!r.ok)throw new Error("http "+r.status);
+    const j=await r.json();
+    if(j.same||busy)return;
+    rev=j.rev;cache=j;emit();
+  }
+  function loop(){clearTimeout(timer);timer=setTimeout(()=>pull().catch(()=>{}).finally(loop),document.hidden?30000:6000)}
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)pull().catch(()=>{}).finally(loop)});
+  async function write(op,path,data){
+    const [col,id]=path.split("/");
+    const send=()=>fetch("/api/data",{method:"POST",headers:{"Content-Type":"application/json","x-coach-code":getCode()},body:JSON.stringify({op,col,id,data})});
+    busy++;
+    try{
+      let r=await send();
+      if(r.status===401){const v=prompt("Code coach pour modifier le suivi :");if(v){setCode(v.trim());r=await send()}}
+      if(r.status===401)throw{code:"invalid_argument"};
+      if(!r.ok)throw{code:"unavailable"};
+    }finally{busy--}
+    if(!busy)pull().catch(()=>{});
+  }
+  try{await pull()}catch(e){return null}
+  if(!cache)return null;
+  loop();
+  return{
+    collection:c=>({onSnapshot(cb){subs[c].push(cb);cb({docs:Object.keys(cache[c]||{}).map(id=>({id,data:()=>cache[c][id]}))})}}),
+    doc:path=>{const [c,id]=path.split("/");return{
+      get:async()=>({exists:!!(cache[c]&&cache[c][id])}),
+      set:d=>write("set",path,d),update:d=>write("update",path,d),delete:()=>write("delete",path)}}
+  };
+}
 (async()=>{
   const c=window.claude;
   if(c&&c.use)c.use("sample").then(s=>{S.sample=s||null;if(S.matchId)refreshMatch()}).catch(()=>{});
-  const db=c&&c.use?await c.use("db"):null;
-  if(!db){offline("Hors ligne : ouvrez la page depuis son lien claude.ai pour enregistrer et partager les données.");return}
+  const db=c&&c.use?await c.use("db"):await httpDb();
+  if(!db){offline("Hors ligne : les données ne sont ni enregistrées ni partagées.");return}
   S.db=db;
   $("dot").className="dot live";$("statusTxt").textContent="Synchronisé en direct avec les autres coachs";
   const onErr=e=>{if(e&&e.code==="revoked"){S.db=null;offline("Accès retiré : les données ne sont plus synchronisées.")}else offline("Synchronisation interrompue. Rechargez la page.")};
